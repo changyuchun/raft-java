@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 
+cd ../raft-java-core && mvn clean install -DskipTests
+cd -
 mvn clean package
 
-EXAMPLE_TAR=raft-java-example-1.8.0-deploy.tar.gz
+EXAMPLE_TAR=raft-java-example-1.9.0-deploy.tar.gz
 ROOT_DIR=./env
 mkdir -p $ROOT_DIR
 cd $ROOT_DIR

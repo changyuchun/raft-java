@@ -2,7 +2,7 @@ package com.github.wenweihu86.raft.storage;
 
 import com.github.wenweihu86.raft.RaftOptions;
 import com.github.wenweihu86.raft.util.RaftFileUtils;
-import com.github.wenweihu86.raft.proto.RaftMessage;
+import com.github.wenweihu86.raft.proto.RaftProto;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
@@ -24,7 +24,7 @@ public class SegmentedLog {
     private String logDir;
     private String logDataDir;
     private int maxSegmentFileSize;
-    private RaftMessage.LogMetaData metaData;
+    private RaftProto.LogMetaData metaData;
     private TreeMap<Long, Segment> startLogIndexSegmentMap = new TreeMap<>();
     // segment log占用的内存大小，用于判断是否需要做snapshot
     private volatile long totalSize;
@@ -48,11 +48,11 @@ public class SegmentedLog {
                 LOG.error("No readable metadata file but found segments in {}", logDir);
                 throw new RuntimeException("No readable metadata file but found segments");
             }
-            metaData = RaftMessage.LogMetaData.newBuilder().setFirstLogIndex(1).build();
+            metaData = RaftProto.LogMetaData.newBuilder().setFirstLogIndex(1).build();
         }
     }
 
-    public RaftMessage.LogEntry getEntry(long index) {
+    public RaftProto.LogEntry getEntry(long index) {
         long firstLogIndex = getFirstLogIndex();
         long lastLogIndex = getLastLogIndex();
         if (index == 0 || index < firstLogIndex || index > lastLogIndex) {
@@ -68,7 +68,7 @@ public class SegmentedLog {
     }
 
     public long getEntryTerm(long index) {
-        RaftMessage.LogEntry entry = getEntry(index);
+        RaftProto.LogEntry entry = getEntry(index);
         if (entry == null) {
             return 0;
         }
@@ -90,9 +90,9 @@ public class SegmentedLog {
         return lastSegment.getEndIndex();
     }
 
-    public long append(List<RaftMessage.LogEntry> entries) {
+    public long append(List<RaftProto.LogEntry> entries) {
         long newLastLogIndex = this.getLastLogIndex();
-        for (RaftMessage.LogEntry entry : entries) {
+        for (RaftProto.LogEntry entry : entries) {
             newLastLogIndex++;
             int entrySize = entry.getSerializedSize();
             int segmentSize = startLogIndexSegmentMap.size();
@@ -142,7 +142,7 @@ public class SegmentedLog {
                 }
                 // 写proto到segment中
                 if (entry.getIndex() == 0) {
-                    entry = RaftMessage.LogEntry.newBuilder(entry)
+                    entry = RaftProto.LogEntry.newBuilder(entry)
                             .setIndex(newLastLogIndex).build();
                 }
                 newSegment.setEndIndex(entry.getIndex());
@@ -191,7 +191,7 @@ public class SegmentedLog {
         } else {
             newActualFirstIndex = startLogIndexSegmentMap.firstKey();
         }
-        updateMetaData(null, null, newActualFirstIndex);
+        updateMetaData(null, null, newActualFirstIndex, null);
         LOG.info("Truncating log from old first index {} to new first index {}",
                 oldFirstIndex, newActualFirstIndex);
     }
@@ -213,7 +213,7 @@ public class SegmentedLog {
                     segment.getRandomAccessFile().close();
                     String fullFileName = logDataDir + File.separator + segment.getFileName();
                     FileUtils.forceDelete(new File(fullFileName));
-                    startLogIndexSegmentMap.remove(segment.getFileName());
+                    startLogIndexSegmentMap.remove(segment.getStartIndex());
                 } else if (newEndIndex < segment.getEndIndex()) {
                     int i = (int) (newEndIndex + 1 - segment.getStartIndex());
                     segment.setEndIndex(newEndIndex);
@@ -246,8 +246,8 @@ public class SegmentedLog {
             long totalLength = segment.getFileSize();
             long offset = 0;
             while (offset < totalLength) {
-                RaftMessage.LogEntry entry = RaftFileUtils.readProtoFromFile(
-                        randomAccessFile, RaftMessage.LogEntry.class);
+                RaftProto.LogEntry entry = RaftFileUtils.readProtoFromFile(
+                        randomAccessFile, RaftProto.LogEntry.class);
                 if (entry == null) {
                     throw new RuntimeException("read segment log failed");
                 }
@@ -303,12 +303,12 @@ public class SegmentedLog {
         }
     }
 
-    public RaftMessage.LogMetaData readMetaData() {
+    public RaftProto.LogMetaData readMetaData() {
         String fileName = logDir + File.separator + "metadata";
         File file = new File(fileName);
         try (RandomAccessFile randomAccessFile = new RandomAccessFile(file, "r")) {
-            RaftMessage.LogMetaData metadata = RaftFileUtils.readProtoFromFile(
-                    randomAccessFile, RaftMessage.LogMetaData.class);
+            RaftProto.LogMetaData metadata = RaftFileUtils.readProtoFromFile(
+                    randomAccessFile, RaftProto.LogMetaData.class);
             return metadata;
         } catch (IOException ex) {
             LOG.warn("meta file not exist, name={}", fileName);
@@ -316,8 +316,16 @@ public class SegmentedLog {
         }
     }
 
-    public void updateMetaData(Long currentTerm, Integer votedFor, Long firstLogIndex) {
-        RaftMessage.LogMetaData.Builder builder = RaftMessage.LogMetaData.newBuilder(this.metaData);
+    /**
+     * 更新raft log meta data，
+     * 包括commitIndex， fix bug: https://github.com/wenweihu86/raft-java/issues/19
+     * @param currentTerm
+     * @param votedFor
+     * @param firstLogIndex
+     * @param commitIndex
+     */
+    public void updateMetaData(Long currentTerm, Integer votedFor, Long firstLogIndex, Long commitIndex) {
+        RaftProto.LogMetaData.Builder builder = RaftProto.LogMetaData.newBuilder(this.metaData);
         if (currentTerm != null) {
             builder.setCurrentTerm(currentTerm);
         }
@@ -326,6 +334,9 @@ public class SegmentedLog {
         }
         if (firstLogIndex != null) {
             builder.setFirstLogIndex(firstLogIndex);
+        }
+        if (commitIndex != null) {
+            builder.setCommitIndex(commitIndex);
         }
         this.metaData = builder.build();
 
@@ -340,7 +351,7 @@ public class SegmentedLog {
         }
     }
 
-    public RaftMessage.LogMetaData getMetaData() {
+    public RaftProto.LogMetaData getMetaData() {
         return metaData;
     }
 
